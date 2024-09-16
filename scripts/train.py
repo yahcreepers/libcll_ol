@@ -9,7 +9,7 @@ from libcll.strategies import build_strategy
 from libcll.datasets import prepare_dataloader
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.cli import LightningCLI
 import random
 
@@ -29,6 +29,8 @@ def main(args):
             augment=args.dataset.augment,
             noise=args.dataset.noise,
             seed=args.training.seed,
+            ssl=args.training.ssl, 
+            samples_per_class=args.training.samples_per_class, 
         )
     )
     print("Preparing Model......")
@@ -59,7 +61,8 @@ def main(args):
         filename=f"{{epoch}}-{{Valid_{args.training.valid_type}:.2f}}",
         save_top_k=1,
         mode="max" if args.training.valid_type == "Accuracy" else "min",
-        every_n_epochs=args.training.eval_epoch,
+        every_n_epochs=args.training.eval_epoch if not args.training.ssl else None, 
+        every_n_train_steps=5000 if args.training.ssl else None, 
     )
     checkpoint_callback_last = ModelCheckpoint(
         monitor=f"step",
@@ -67,18 +70,24 @@ def main(args):
         filename="{epoch}-{step}",
         save_top_k=1,
         mode="max",
-        every_n_epochs=args.training.eval_epoch,
+        every_n_epochs=args.training.eval_epoch if not args.training.ssl else None,
+        every_n_train_steps=5000 if args.training.ssl else None, 
     )
+    lr_monitor = LearningRateMonitor(logging_interval='step')
 
     print("Start Training......")
     trainer = pl.Trainer(
-        max_epochs=args.training.epoch,
+        max_epochs=args.training.epoch if torch.cuda.device_count() == 1 and args.training.ssl else None,
+        max_steps=args.training.max_steps, 
         accelerator="gpu",
         logger=tb_logger,
         log_every_n_steps=args.training.log_step,
         deterministic=True,
-        check_val_every_n_epoch=args.training.eval_epoch,
-        callbacks=[checkpoint_callback_best, checkpoint_callback_last],
+        check_val_every_n_epoch=None if torch.cuda.device_count() == 1 and args.training.ssl else args.training.eval_epoch,
+        val_check_interval=5000 if torch.cuda.device_count() == 1 and args.training.ssl else None, 
+        callbacks=[checkpoint_callback_best, checkpoint_callback_last, lr_monitor],
+        strategy="ddp_find_unused_parameters_true" if torch.cuda.device_count() > 1 else "auto", 
+        # num_nodes=2, 
     )
     if args.training.do_train:
         with open(f"{args.training.output_dir}/config.yaml", "w") as f:
@@ -128,8 +137,11 @@ def parse_args():
     )
     parser.add_argument("--hidden_dim", dest="model.hidden_dim", type=int, default=500)
     parser.add_argument("--epoch", dest="training.epoch", type=int, default=300)
+    parser.add_argument("--max_steps", dest="training.max_steps", type=int, default=2 ** 20)
     parser.add_argument("--do_train", dest="training.do_train", action="store_true")
     parser.add_argument("--do_predict", dest="training.do_predict", action="store_true")
+    parser.add_argument("--ssl", dest="training.ssl", action="store_true")
+    parser.add_argument("--samples_per_class", dest="training.samples_per_class", type=int, default=10)
     parser.add_argument("--strategy", dest="strategy._name", type=str, default="SCL")
     parser.add_argument("--type", dest="strategy.type", type=str, default=None)
     parser.add_argument("--lr", dest="optimizer.lr", type=float, default=1e-4)

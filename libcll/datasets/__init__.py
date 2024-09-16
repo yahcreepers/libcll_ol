@@ -1,7 +1,9 @@
 import torch
 import torchvision.transforms as transforms
 from torch.utils.data import random_split, Sampler, DataLoader
+from torch.utils.data.sampler import BatchSampler, RandomSampler
 import numpy as np
+import copy
 from .cl_base_dataset import CLBaseDataset
 from .cl_cifar10 import CLCIFAR10
 from .cl_cifar20 import CLCIFAR20
@@ -14,6 +16,8 @@ from .cl_kmnist import CLKMNIST
 from .cl_mnist import CLMNIST
 from .cl_micro_imagenet10 import CLMicro_ImageNet10
 from .cl_micro_imagenet20 import CLMicro_ImageNet20
+from .cl_ol_dataset import CLOLDataset
+from .randaugment import RandAugment
 from .utils import get_transition_matrix, collate_fn_multi_label, collate_fn_one_hot
 
 
@@ -40,6 +44,8 @@ def prepare_dataloader(
     augment=False,
     noise=0.1,
     seed=1126,
+    ssl=False, 
+    samples_per_class=10, 
 ):
 
     if dataset == "mnist":
@@ -414,31 +420,89 @@ def prepare_dataloader(
     if valid_type == "Accuracy":
         for i in valid_idx:
             train_set.targets[i] = train_set.true_targets[i].view(1)
-    train_loader = DataLoader(
-        train_set,
-        sampler=train_sampler,
-        batch_size=batch_size,
-        collate_fn=(
-            collate_fn_multi_label
-            if not one_hot
-            else lambda batch: collate_fn_one_hot(
-                batch, num_classes=train_set.num_classes
-            )
-        ),
-        shuffle=False,
-        num_workers=4,
-    )
-    valid_loader = DataLoader(
-        train_set,
-        sampler=valid_sampler,
-        batch_size=batch_size,
-        collate_fn=collate_fn_multi_label,
-        shuffle=False,
-        num_workers=4,
-    )
+    
+    if ssl:
+        lb_idx = []
+        ulb_idx = []
+        for c in range(train_set.num_classes):
+            c_idx = torch.where(train_set.true_targets[train_idx] == c)[0]
+            lb_i = np.random.choice(range(c_idx.shape[0]), samples_per_class, replace=False)
+            ulb_mask = torch.ones(c_idx.shape[0], dtype=torch.bool)
+            ulb_mask[lb_i] = 0
+            lb_idx.extend(train_idx[c_idx[lb_i]])
+            ulb_idx.extend(train_idx[c_idx[ulb_mask]])
+        lb_idx = torch.tensor(lb_idx)
+        ulb_idx = torch.tensor(ulb_idx)
+        # print("lb:", lb_idx.shape, torch.cat((torch.tensor(train_idx), lb_idx)).unique().shape)
+        # print("ulb:", ulb_idx.shape, torch.cat((torch.tensor(train_idx), ulb_idx)).unique().shape)
+        lb_data, lb_targets = train_set.data[lb_idx], train_set.true_targets[lb_idx]
+        ulb_data, ulb_targets, ulb_true_targets = train_set.data[ulb_idx], torch.tensor(train_set.targets)[ulb_idx], train_set.true_targets[ulb_idx]
+        strong_transform = copy.deepcopy(train_set.transform)
+        strong_transform.transforms.insert(0, RandAugment(3, 5))
+        lb_train_set = CLOLDataset(lb_data, lb_targets, lb_targets, weak_transform=train_set.transform, alg="ord")
+        ulb_train_set = CLOLDataset(ulb_data, ulb_targets, ulb_true_targets, weak_transform=train_set.transform, strong_transform=strong_transform, alg="freematch")
+        lb_data_sampler = RandomSampler(lb_train_set, True, batch_size * 2 ** 20)
+        lb_batch_sampler = BatchSampler(lb_data_sampler, batch_size, True)
+        ulb_data_sampler = RandomSampler(ulb_train_set, True, batch_size * 7 * 2 ** 20)
+        ulb_batch_sampler = BatchSampler(ulb_data_sampler, batch_size * 7, True)
+        # print(batch_size)
+        def collate_fn(batch):
+            # print("WWW", batch)
+            # print("AAA", len(batch))
+            return batch
+        lb_train_loader = DataLoader(
+            lb_train_set, 
+            batch_sampler=lb_batch_sampler, 
+            # sampler=data_sampler, 
+            # batch_size=batch_size, 
+            # shuffle=True,
+            # collate_fn=collate_fn, 
+            num_workers=4,
+        )
+        ulb_train_loader = DataLoader(
+            ulb_train_set,  
+            batch_sampler=ulb_batch_sampler, 
+            # batch_size=batch_size * 7, 
+            # shuffle=True,
+            num_workers=4,
+        )
+        train_loader = {"lb_data": lb_train_loader, "ulb_data": ulb_train_loader}
+    else:
+        train_loader = DataLoader(
+            train_set,
+            sampler=train_sampler,
+            batch_size=batch_size,
+            collate_fn=(
+                collate_fn_multi_label
+                if not one_hot
+                else lambda batch: collate_fn_one_hot(
+                    batch, num_classes=train_set.num_classes
+                )
+            ),
+            shuffle=False,
+            num_workers=4,
+        )
     test_loader = DataLoader(
         test_set, batch_size=batch_size, shuffle=False, num_workers=4
     )
+    if valid_split:
+        valid_loader = DataLoader(
+            train_set,
+            sampler=valid_sampler,
+            batch_size=batch_size,
+            collate_fn=collate_fn_multi_label,
+            shuffle=False,
+            num_workers=4,
+        )
+    else:
+        valid_loader = test_loader
+    if ssl:
+        ulb_valid_loader = DataLoader(
+            ulb_train_set,  
+            batch_size=batch_size * 7, 
+            num_workers=4,
+        )
+        valid_loader = [valid_loader, ulb_valid_loader]
     Q = torch.zeros((train_set.num_classes, train_set.num_classes))
     for idx in train_idx:
         Q[train_set.true_targets[idx].long()] += torch.histc(

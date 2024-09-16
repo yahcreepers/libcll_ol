@@ -5,6 +5,10 @@ from .MCL import MCL
 from .FWD import FWD
 from .DM import DM
 from .CPE import CPE
+from .FreeMatch import FreeMatch
+from .FixMatch import FixMatch
+from .CL_FreeMatch import CL_FreeMatch
+from .CL_FixMatch import CL_FixMatch
 
 STRATEGY_LIST = {
     "SCL": SCL,
@@ -13,6 +17,10 @@ STRATEGY_LIST = {
     "FWD": FWD,
     "DM": DM,
     "CPE": CPE,
+    "FreeMatch": FreeMatch, 
+    "FixMatch": FixMatch, 
+    "CL_FreeMatch": CL_FreeMatch, 
+    "CL_FixMatch": CL_FixMatch, 
 }
 
 

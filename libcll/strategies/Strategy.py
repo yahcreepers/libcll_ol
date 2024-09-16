@@ -58,7 +58,7 @@ class Strategy(pl.LightningModule):
             self.Q = torch.ones(num_classes, num_classes) * 1 / (num_classes - 1)
             for k in range(num_classes):
                 self.Q[k, k] = 0
-        self.Q = self.Q.cuda()
+        self.Q = self.Q.to(self.device)
         if torch.det(self.Q) != 0:
             self.Qinv = torch.inverse(self.Q)
         else:
@@ -112,10 +112,10 @@ class Strategy(pl.LightningModule):
             )
         self.val_loss.append(val_loss)
         return {"val_loss": val_loss}
-
+    
     def on_validation_epoch_end(self):
         avg_val_loss = torch.stack(self.val_loss).mean()
-        self.log(f"Valid_{self.valid_type}", avg_val_loss)
+        self.log(f"Valid_{self.valid_type}", avg_val_loss, sync_dist=True)
         self.val_loss.clear()
 
     def test_step(self, batch, batch_idx):

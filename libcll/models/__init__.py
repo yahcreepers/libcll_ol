@@ -1,7 +1,7 @@
 import inspect
 from .Linear import Linear
 from .MLP import MLP
-from .ResNet import ResNet18, ResNet34
+from .ResNet import ResNet18, ResNet34, WideResNet
 from .DenseNet import DenseNet
 
 MODEL_LIST = {
@@ -9,6 +9,7 @@ MODEL_LIST = {
     "MLP": MLP,
     "ResNet18": ResNet18,
     "ResNet34": ResNet34,
+    "WideResNet": WideResNet, 
     "DenseNet": DenseNet,
 }
 

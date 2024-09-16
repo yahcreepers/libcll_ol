@@ -16,6 +16,9 @@ training:
   config_file: ???
   batch_size: 256
   epoch: 300
+  max_steps: -1
+  samples_per_class: 10
+  ssl: False
   valid_type: ???
   eval_epoch: 10
   do_train: False
