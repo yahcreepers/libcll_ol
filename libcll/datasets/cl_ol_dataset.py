@@ -69,3 +69,6 @@ class CLOLDataset(Dataset):
 
     def __len__(self):
         return len(self.targets)
+
+    def build_dataset(self, train=True, num_cl=0, transition_matrix=None, noise=None, seed=1126):
+        pass

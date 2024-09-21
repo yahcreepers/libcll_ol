@@ -41,7 +41,7 @@ class CL_FixMatch(Strategy):
         )
 
         p = (1 - F.softmax(logits_x_ulb_w, dim=1) + 1e-6).log() * -1
-        cl_loss = -F.nll_loss(p, y_cl.long())
+        cl_loss = -F.nll_loss(p, y_cl.long()) # scl-nl
 
         loss = sup_loss + unsup_loss + cl_loss
         self.log("Threshold/Confidence_Threshold", self.time_p)
@@ -78,7 +78,7 @@ class CL_FixMatch(Strategy):
 
         per_param_args = [{'params': decay},
                         {'params': no_decay, 'weight_decay': 0.0}]
-        optimizer = SGD(per_param_args, lr=self.lr, momentum=0.9, weight_decay=5e-4, nesterov=True)
+        optimizer = SGD(per_param_args, lr=self.lr, momentum=0.9, weight_decay=self.weight_decay, nesterov=True)
         scheduler = LambdaLR(optimizer, lr_lambda=_lr_lambda)
         scheduler = {
             'scheduler': scheduler,

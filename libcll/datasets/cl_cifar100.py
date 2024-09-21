@@ -1,16 +1,21 @@
 import torch
-from torch.utils.data import Dataset
 import torchvision
 import torchvision.transforms as transforms
 import numpy as np
-from sklearn.datasets import fetch_openml
-from sklearn.preprocessing import LabelEncoder
+from PIL import Image
+import urllib.request
+from tqdm import tqdm
+import pickle
+import gdown
+import os
 from libcll.datasets.cl_base_dataset import CLBaseDataset
 from libcll.datasets.utils import get_transition_matrix
 
 
-class CLYeast(CLBaseDataset):
+class CLCIFAR100(torchvision.datasets.CIFAR100, CLBaseDataset):
     """
+
+    Real-world complementary-label dataset. Call ``gen_complementary_target()`` if you want to access synthetic complementary labels.
 
     Parameters
     ----------
@@ -28,6 +33,9 @@ class CLYeast(CLBaseDataset):
 
     download : bool
         if true, downloads the dataset from the internet and puts it in root directory. If dataset is already downloaded, it is not downloaded again.
+
+    num_cl : int
+        the number of real-world complementary labels of each data chosen from [1, 3].
 
     Attributes
     ----------
@@ -50,42 +58,47 @@ class CLYeast(CLBaseDataset):
 
     def __init__(
         self,
-        root="./data/yeast",
+        root="./data/cifar100",
         train=True,
         transform=None,
         target_transform=None,
         download=True,
     ):
-        data = fetch_openml(data_id=181)
-        self.data = data.data.to_numpy()
-        self.targets = LabelEncoder().fit_transform(data.target)
-
-        self.root = root
-        self.transform = transform
-        self.target_transform = target_transform
-        self.val_split = 0.9
-        self.num_classes = 10
-        self.input_dim = 8
-        rng = np.random.default_rng(seed=1126)
-        idx = rng.permutation(len(self.targets))
-
-        if train:
-            self.data = torch.Tensor(self.data[idx[: int(self.val_split * len(idx))]])
-            self.targets = torch.Tensor(
-                self.targets[idx[: int(self.val_split * len(idx))]]
-            )
-        else:
-            self.data = torch.Tensor(self.data[idx[int(self.val_split * len(idx)) :]])
-            self.targets = torch.Tensor(
-                self.targets[idx[int(self.val_split * len(idx)) :]]
-            )
+        super(CLCIFAR100, self).__init__(
+            root, train, transform, target_transform, download
+        )
+        self.targets = torch.Tensor(self.targets)
+        self.num_classes = 100
+        self.input_dim = 3 * 32 * 32
     
     @classmethod
     def build_dataset(self, dataset_name=None, train=True, num_cl=0, transition_matrix=None, noise=None, seed=1126):
         if train:
-            dataset = self(train=train)
+            train_transform = transforms.Compose(
+                [
+                    transforms.RandomHorizontalFlip(),
+                    transforms.RandomCrop(32, padding=4),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        [0.4914, 0.4822, 0.4465], [0.247, 0.2435, 0.2616]
+                    ),
+                ]
+            )
+            dataset = self(
+                train=True,
+                transform=train_transform,
+            )
             Q = get_transition_matrix(transition_matrix, dataset.num_classes, noise, seed)
             dataset.gen_complementary_target(num_cl, Q)
         else:
-            dataset = self(train=False)
+            test_transform = transforms.Compose(
+                [
+                    transforms.ToTensor(),
+                    transforms.Normalize([0.4914, 0.4822, 0.4465], [0.247, 0.2435, 0.2616]),
+                ]
+            )
+            dataset = self(
+                train=False,
+                transform=test_transform,
+            )
         return dataset

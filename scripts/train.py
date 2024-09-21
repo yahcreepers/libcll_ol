@@ -6,7 +6,7 @@ from argparse import ArgumentParser
 from omegacli import parse_config, OmegaConf
 from libcll.models import build_model
 from libcll.strategies import build_strategy
-from libcll.datasets import prepare_dataloader
+from libcll.datasets import prepare_cl_data_module
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
@@ -17,22 +17,25 @@ import random
 def main(args):
     print("Preparing Dataset......")
     pl.seed_everything(args.training.seed, workers=True)
-    train_loader, valid_loader, test_loader, input_dim, num_classes, Q, class_priors = (
-        prepare_dataloader(
-            args.dataset._name,
-            batch_size=args.training.batch_size,
-            valid_split=args.training.valid_split,
-            valid_type=args.training.valid_type,
-            one_hot=(args.strategy._name == "MCL"),
-            num_cl=args.dataset.num_cl,
-            transition_matrix=args.dataset.transition_matrix,
-            augment=args.dataset.augment,
-            noise=args.dataset.noise,
-            seed=args.training.seed,
-            ssl=args.training.ssl, 
-            samples_per_class=args.training.samples_per_class, 
-        )
+    cl_data_module = prepare_cl_data_module(
+        args.dataset._name,
+        batch_size=args.training.batch_size,
+        valid_split=args.training.valid_split,
+        valid_type=args.training.valid_type,
+        one_hot=(args.strategy._name == "MCL"),
+        num_cl=args.dataset.num_cl,
+        transition_matrix=args.dataset.transition_matrix,
+        augment=args.dataset.augment,
+        noise=args.dataset.noise,
+        seed=args.training.seed,
+        ssl=args.training.ssl, 
+        samples_per_class=args.training.samples_per_class, 
     )
+    cl_data_module.prepare_data()
+    cl_data_module.setup(stage="fit")
+
+    input_dim, num_classes = cl_data_module.train_set.input_dim, cl_data_module.train_set.num_classes
+    Q, class_priors = cl_data_module.get_distribution_info()
     print("Preparing Model......")
 
     pl.seed_everything(args.training.seed, workers=True)
@@ -41,6 +44,8 @@ def main(args):
         input_dim=input_dim,
         hidden_dim=args.model.hidden_dim,
         num_classes=num_classes,
+        depth=args.model.depth, 
+        widen_factor=args.model.widen_factor, 
     )
 
     strategy = build_strategy(
@@ -50,6 +55,7 @@ def main(args):
         num_classes=num_classes,
         type=args.strategy.type,
         lr=args.optimizer.lr,
+        weight_decay=args.optimizer.weight_decay, 
         Q=Q,
         class_priors=class_priors,
     )
@@ -77,16 +83,17 @@ def main(args):
 
     print("Start Training......")
     trainer = pl.Trainer(
-        max_epochs=args.training.epoch if torch.cuda.device_count() == 1 and args.training.ssl else None,
+        max_epochs=args.training.epoch if not args.training.ssl else None,
         max_steps=args.training.max_steps, 
         accelerator="gpu",
         logger=tb_logger,
         log_every_n_steps=args.training.log_step,
         deterministic=True,
-        check_val_every_n_epoch=None if torch.cuda.device_count() == 1 and args.training.ssl else args.training.eval_epoch,
-        val_check_interval=5000 if torch.cuda.device_count() == 1 and args.training.ssl else None, 
+        check_val_every_n_epoch=args.training.eval_epoch if not args.training.ssl else None,
+        val_check_interval=5000 if args.training.ssl else None, 
         callbacks=[checkpoint_callback_best, checkpoint_callback_last, lr_monitor],
         strategy="ddp_find_unused_parameters_true" if torch.cuda.device_count() > 1 else "auto", 
+        use_distributed_sampler=False, 
         # num_nodes=2, 
     )
     if args.training.do_train:
@@ -94,15 +101,14 @@ def main(args):
             OmegaConf.save(args, f)
         trainer.fit(
             strategy,
-            train_dataloaders=train_loader,
-            val_dataloaders=valid_loader,
+            datamodule=cl_data_module, 
         )
     if args.training.do_predict:
         if args.training.do_train:
-            trainer.test(dataloaders=test_loader, ckpt_path="best")
+            trainer.test(datamodule=cl_data_module, ckpt_path="best")
         else:
             trainer.test(
-                strategy, dataloaders=test_loader, ckpt_path=args.training.model_path
+                strategy, datamodule=cl_data_module, ckpt_path=args.training.model_path
             )
 
 
@@ -136,6 +142,8 @@ def parse_args():
         "--batch_size", dest="training.batch_size", type=int, default=256
     )
     parser.add_argument("--hidden_dim", dest="model.hidden_dim", type=int, default=500)
+    parser.add_argument("--depth", dest="model.depth", type=int, default=28)
+    parser.add_argument("--widen_factor", dest="model.widen_factor", type=int, default=2)
     parser.add_argument("--epoch", dest="training.epoch", type=int, default=300)
     parser.add_argument("--max_steps", dest="training.max_steps", type=int, default=2 ** 20)
     parser.add_argument("--do_train", dest="training.do_train", action="store_true")
@@ -145,6 +153,7 @@ def parse_args():
     parser.add_argument("--strategy", dest="strategy._name", type=str, default="SCL")
     parser.add_argument("--type", dest="strategy.type", type=str, default=None)
     parser.add_argument("--lr", dest="optimizer.lr", type=float, default=1e-4)
+    parser.add_argument("--weight_decay", dest="optimizer.weight_decay", type=float, default=5e-4)
     parser.add_argument("--augment", dest="dataset.augment", action="store_true")
     parser.add_argument(
         "--transition_matrix",
@@ -164,5 +173,6 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    args.training.batch_size = int(args.training.batch_size / torch.cuda.device_count())
     os.makedirs(args.training.output_dir, exist_ok=True)
     main(args)

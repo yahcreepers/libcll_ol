@@ -160,7 +160,7 @@ class CL_FreeMatch(Strategy):
 
         per_param_args = [{'params': decay},
                         {'params': no_decay, 'weight_decay': 0.0}]
-        optimizer = SGD(per_param_args, lr=self.lr, momentum=0.9, weight_decay=5e-4, nesterov=True)
+        optimizer = SGD(per_param_args, lr=self.lr, momentum=0.9, weight_decay=self.weight_decay, nesterov=True)
         scheduler = LambdaLR(optimizer, lr_lambda=_lr_lambda)
         scheduler = {
             'scheduler': scheduler,

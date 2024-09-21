@@ -92,7 +92,6 @@ class FreeMatch(Strategy):
         num_ulb = x_ulb_w.shape[0]
         inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
         logits = self.model(inputs)
-        # print(logits)
         logits_x_lb = logits[:num_lb]
         logits_x_ulb_w, logits_x_ulb_s = logits[num_lb:].chunk(2)
         sup_loss = self.ce_loss(logits_x_lb, y_lb.long())
@@ -156,7 +155,7 @@ class FreeMatch(Strategy):
 
         per_param_args = [{'params': decay},
                         {'params': no_decay, 'weight_decay': 0.0}]
-        optimizer = SGD(per_param_args, lr=self.lr, momentum=0.9, weight_decay=5e-4, nesterov=True)
+        optimizer = SGD(per_param_args, lr=self.lr, momentum=0.9, weight_decay=self.weight_decay, nesterov=True)
         scheduler = LambdaLR(optimizer, lr_lambda=_lr_lambda)
         scheduler = {
             'scheduler': scheduler,
@@ -208,10 +207,10 @@ class FreeMatch(Strategy):
         for thres in [0.0, 0.5, 0.75]:
             mask_log = pseudo_logits.ge(thres)
             acc = mask_acc[mask_log].float().mean()
-            self.log(f"Noisy_Rate/Thres_{thres}", 1 - acc)
-            self.log(f"Sampling_Rate/Thres_{thres}", mask_log.float().mean())
-        self.log(f"Noisy_Rate/Thres_Alg", 1 - mask_acc[mask.long()].float().mean())
-        self.log(f"Sampling_Rate/Thres_Alg", mask.float().mean())
+            self.log(f"Noisy_Rate/Thres_{thres}", 1 - acc, sync_dist=True)
+            self.log(f"Sampling_Rate/Thres_{thres}", mask_log.float().mean(), sync_dist=True)
+        self.log(f"Noisy_Rate/Thres_Alg", 1 - mask_acc[mask.long()].float().mean(), sync_dist=True)
+        self.log(f"Sampling_Rate/Thres_Alg", mask.float().mean(), sync_dist=True)
         self.val_loss.clear()
         self.pseudo_labels.clear()
         self.pseudo_logits.clear()

@@ -41,6 +41,7 @@ class Strategy(pl.LightningModule):
         valid_type="SCEL",
         type="NL",
         lr=1e-4,
+        weight_decay=5e-4, 
         Q=None,
         class_priors=None,
     ):
@@ -49,6 +50,7 @@ class Strategy(pl.LightningModule):
         self.valid_type = valid_type
         self.type = type
         self.lr = lr
+        self.weight_decay = weight_decay
         self.num_classes = num_classes
         self.Q = Q
         self.class_priors = class_priors

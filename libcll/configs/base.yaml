@@ -1,6 +1,8 @@
 model:
   _name: ???
   hidden_dim: 256
+  depth: 28
+  widen_factor: 2
 dataset:
   _name: ???
   num_cl: 1
@@ -9,6 +11,7 @@ dataset:
   transition_matrix: uniform
 optimizer:
   lr: 1e-4
+  weight_decay: 5e-4
 strategy:
   _name: ???
   type: ???

@@ -14,13 +14,15 @@ MODEL_LIST = {
 }
 
 
-def build_model(model, input_dim=None, hidden_dim=None, num_classes=None):
+def build_model(model, input_dim=None, hidden_dim=None, num_classes=None, depth=None, widen_factor=None):
     if model not in MODEL_LIST:
         raise ValueError(f"Model must be chosen from {list(MODEL_LIST.keys())}.")
     args = {
         "input_dim": input_dim,
         "hidden_dim": hidden_dim,
         "num_classes": num_classes,
+        "depth": depth, 
+        "widen_factor": widen_factor, 
     }
     model = MODEL_LIST[model]
     model_args = inspect.signature(model.__init__).parameters
