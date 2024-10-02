@@ -87,7 +87,7 @@ class FreeMatch(Strategy):
     
     def training_step(self, batch, batch_idx):
         x_lb, y_lb = batch["lb_data"]
-        x_ulb_w, x_ulb_s, y_cl, y_ulb = batch["ulb_data"]
+        x_ulb_w, x_ulb_s, y_cl, y_ulb, cl_mask = batch["ulb_data"]
         num_lb = x_lb.shape[0]
         num_ulb = x_ulb_w.shape[0]
         inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
@@ -181,7 +181,7 @@ class FreeMatch(Strategy):
             self.val_loss.append(val_loss)
             return {"val_loss": val_loss}
         if dataloader_idx == 1:
-            x_ulb_w, x_ulb_s, y_cl, y_ulb = batch
+            x_ulb_w, x_ulb_s, y_cl, y_ulb, cl_mask = batch
             num_ulb = x_ulb_w.shape[0]
             inputs = torch.cat((x_ulb_w, x_ulb_s))
             logits = self.model(inputs)

@@ -8,6 +8,7 @@ dataset:
   num_cl: 1
   augment: False
   valid_split: 0.1
+  cl_ratio: 1.0
   transition_matrix: uniform
 optimizer:
   lr: 1e-4

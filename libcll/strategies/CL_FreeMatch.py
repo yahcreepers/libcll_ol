@@ -87,7 +87,7 @@ class CL_FreeMatch(Strategy):
     
     def training_step(self, batch, batch_idx):
         x_lb, y_lb = batch["lb_data"]
-        x_ulb_w, x_ulb_s, y_cl, y_ulb = batch["ulb_data"]
+        x_ulb_w, x_ulb_s, y_cl, y_ulb, cl_mask = batch["ulb_data"]
         num_lb = x_lb.shape[0]
         num_ulb = x_ulb_w.shape[0]
         inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
@@ -117,9 +117,20 @@ class CL_FreeMatch(Strategy):
             self.p_model, 
             self.label_hist, 
         )
-        p = (1 - F.softmax(logits_x_ulb_w, dim=1) + 1e-6).log() * -1
-        cl_loss = -F.nll_loss(p, y_cl.long())
+        # print(sum(cl_mask == 0), cl_mask.shape)
+        # p = (1 - F.softmax(logits_x_ulb_w, dim=1) + 1e-6).log() * -1
+        # cl_loss = -F.nll_loss(p, y_cl.long())
+        # exit()
+        # print("WWW", cl_mask.shape, y_cl.shape)
+        # exit()
+        N = torch.count_nonzero(cl_mask)
+        if N > 0:
+            p = (1 - F.softmax(logits_x_ulb_w, dim=1) + 1e-6).log() * -1
+            cl_loss = -(F.nll_loss(p, y_cl.long(), reduction="none") * cl_mask).sum() / N
+        else:
+            cl_loss = 0
         
+        # exit()
         loss = sup_loss + unsup_loss + 0.05 * ent_loss + cl_loss
         self.log("Threshold/Confidence_Threshold", self.time_p)
         # self.log("Sampling_Rate", mask.float().mean())
@@ -186,7 +197,7 @@ class CL_FreeMatch(Strategy):
             self.val_loss.append(val_loss)
             return {"val_loss": val_loss}
         if dataloader_idx == 1:
-            x_ulb_w, x_ulb_s, y_cl, y_ulb = batch
+            x_ulb_w, x_ulb_s, y_cl, y_ulb, mask = batch
             num_ulb = x_ulb_w.shape[0]
             inputs = torch.cat((x_ulb_w, x_ulb_s))
             logits = self.model(inputs)
@@ -212,10 +223,10 @@ class CL_FreeMatch(Strategy):
         for thres in [0.0, 0.5, 0.75]:
             mask_log = pseudo_logits.ge(thres)
             acc = mask_acc[mask_log].float().mean()
-            self.log(f"Noisy_Rate/Thres_{thres}", 1 - acc)
-            self.log(f"Sampling_Rate/Thres_{thres}", mask_log.float().mean())
-        self.log(f"Noisy_Rate/Thres_Alg", 1 - mask_acc[mask.long()].float().mean())
-        self.log(f"Sampling_Rate/Thres_Alg", mask.float().mean())
+            self.log(f"Noisy_Rate/Thres_{thres}", 1 - acc, sync_dist=True)
+            self.log(f"Sampling_Rate/Thres_{thres}", mask_log.float().mean(), sync_dist=True)
+        self.log(f"Noisy_Rate/Thres_Alg", 1 - mask_acc[mask.long()].float().mean(), sync_dist=True)
+        self.log(f"Sampling_Rate/Thres_Alg", mask.float().mean(), sync_dist=True)
         self.val_loss.clear()
         self.pseudo_labels.clear()
         self.pseudo_logits.clear()

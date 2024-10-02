@@ -47,10 +47,12 @@ def prepare_cl_data_module(
     seed=1126,
     ssl=False, 
     samples_per_class=10, 
+    cl_ratio=1.0, 
 ):
 
     dataset_class = D_LIST[dataset]
     cl_data_module = CLDataModule(
+        dataset, 
         dataset_class,
         batch_size=batch_size,
         valid_split=valid_split,
@@ -63,5 +65,6 @@ def prepare_cl_data_module(
         seed=seed,
         ssl=ssl, 
         samples_per_class=samples_per_class, 
+        cl_ratio=cl_ratio, 
     )
     return cl_data_module

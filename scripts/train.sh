@@ -8,7 +8,7 @@ valid_type=$6
 num_cl=$7
 transition_matrix=$8
 
-output_dir="/tmp2/yahcreeper/libcll/logs/${strategy}/${dataset}-multi_label_${num_cl}-${transition_matrix}/${strategy}-${tp}-${model}-${dataset}"
+output_dir="/tmp2/yahcreeper/test/libcll/logs/${strategy}/${dataset}-multi_label_${num_cl}-${transition_matrix}/${strategy}-${tp}-${model}-${dataset}"
 python scripts/train.py \
     --do_train \
     --do_predict \

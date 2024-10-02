@@ -25,7 +25,7 @@ class CL_FixMatch(Strategy):
     
     def training_step(self, batch, batch_idx):
         x_lb, y_lb = batch["lb_data"]
-        x_ulb_w, x_ulb_s, y_cl, y_ulb = batch["ulb_data"]
+        x_ulb_w, x_ulb_s, y_cl, y_ulb, cl_mask = batch["ulb_data"]
         num_lb = x_lb.shape[0]
         num_ulb = x_ulb_w.shape[0]
         inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
@@ -40,8 +40,12 @@ class CL_FixMatch(Strategy):
             logits_x_ulb_w, 
         )
 
-        p = (1 - F.softmax(logits_x_ulb_w, dim=1) + 1e-6).log() * -1
-        cl_loss = -F.nll_loss(p, y_cl.long()) # scl-nl
+        N = torch.count_nonzero(cl_mask)
+        if N > 0:
+            p = (1 - F.softmax(logits_x_ulb_w, dim=1) + 1e-6).log() * -1
+            cl_loss = -(F.nll_loss(p, y_cl.long(), reduction="none") * cl_mask).sum() / N
+        else:
+            cl_loss = 0
 
         loss = sup_loss + unsup_loss + cl_loss
         self.log("Threshold/Confidence_Threshold", self.time_p)

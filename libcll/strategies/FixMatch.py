@@ -25,7 +25,7 @@ class FixMatch(Strategy):
     
     def training_step(self, batch, batch_idx):
         x_lb, y_lb = batch["lb_data"]
-        x_ulb_w, x_ulb_s, y_cl, y_ulb = batch["ulb_data"]
+        x_ulb_w, x_ulb_s, y_cl, y_ulb, cl_mask = batch["ulb_data"]
         num_lb = x_lb.shape[0]
         num_ulb = x_ulb_w.shape[0]
         inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))

@@ -211,6 +211,7 @@ class CLCIFAR20(torchvision.datasets.CIFAR100, CLBaseDataset):
             dataset = self(
                 train=True,
                 transform=train_transform,
+                num_cl=num_cl, 
             )
             if dataset_name == "cifar20":
                 Q = get_transition_matrix(transition_matrix, dataset.num_classes, noise, seed)
@@ -225,5 +226,6 @@ class CLCIFAR20(torchvision.datasets.CIFAR100, CLBaseDataset):
             dataset = self(
                 train=False,
                 transform=test_transform,
+                num_cl=num_cl, 
             )
         return dataset

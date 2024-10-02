@@ -45,30 +45,35 @@ class CLOLDataset(Dataset):
             data, 
             targets, 
             true_targets, 
+            mask=None, 
             weak_transform=None, 
             strong_transform=None, 
             alg=None, 
     ):
         self.data = data
         self.targets = targets
+        self.true_targets = true_targets
+        self.mask = mask
         self.weak_transform = weak_transform
         self.strong_transform = strong_transform
         self.alg = alg
-        self.true_targets = true_targets
 
     def __getitem__(self, index):
         img, target, true_target = self.data[index], self.targets[index], self.true_targets[index]
         img = Image.fromarray(img)
-
+        if self.mask is not None:
+            mask = self.mask[index]
+        else:
+            mask = torch.tensor(1)
         if self.weak_transform is not None:
             img_w = self.weak_transform(img)
         if self.alg == "ord":
             return img_w, target # uw, ord_labels
         elif self.alg == "freematch":
-            return img_w, self.strong_transform(img), target, true_target
+            return img_w, self.strong_transform(img), target, true_target, mask
 
     def __len__(self):
-        return len(self.targets)
+        return len(self.data)
 
     def build_dataset(self, train=True, num_cl=0, transition_matrix=None, noise=None, seed=1126):
         pass

@@ -64,6 +64,7 @@ class DistributedProxySampler(DistributedSampler):
 class CLDataModule(pl.LightningDataModule):
     def __init__(
         self, 
+        dataset_name, 
         dataset_class,
         batch_size=256,
         valid_split=0.1,
@@ -76,8 +77,10 @@ class CLDataModule(pl.LightningDataModule):
         seed=1126,
         ssl=False, 
         samples_per_class=10, 
+        cl_ratio=1.0, 
     ):
         super().__init__()
+        self.dataset_name = dataset_name
         self.dataset_class = dataset_class
         self.batch_size = batch_size
         self.valid_split = valid_split
@@ -90,20 +93,18 @@ class CLDataModule(pl.LightningDataModule):
         self.seed = seed
         self.ssl = ssl
         self.samples_per_class = samples_per_class
+        self.cl_ratio = cl_ratio
     
     def setup(self, stage=None):
         pl.seed_everything(self.seed, workers=True)
-        self.train_set = self.dataset_class.build_dataset(train=True, num_cl=self.num_cl, transition_matrix=self.transition_matrix, noise=self.noise, seed=self.seed)
-        self.test_set = self.dataset_class.build_dataset(train=False)
+        self.train_set = self.dataset_class.build_dataset(self.dataset_name, train=True, num_cl=self.num_cl, transition_matrix=self.transition_matrix, noise=self.noise, seed=self.seed)
+        self.test_set = self.dataset_class.build_dataset(self.dataset_name, train=False)
         idx = np.arange(len(self.train_set))
         np.random.shuffle(idx)
         self.train_idx = idx[: int(len(self.train_set) * (1 - self.valid_split))]
         self.valid_idx = idx[int(len(self.train_set) * (1 - self.valid_split)) :]
-        if self.valid_type == "Accuracy":
-            for i in self.valid_idx:
-                self.train_set.targets[i] = self.train_set.true_targets[i].view(1)
         
-        if self.ssl:
+        if self.ssl or 1:
             lb_idx = []
             ulb_idx = []
             for c in range(self.train_set.num_classes):
@@ -116,11 +117,20 @@ class CLDataModule(pl.LightningDataModule):
             lb_idx = torch.tensor(lb_idx)
             ulb_idx = torch.tensor(ulb_idx)
             lb_data, lb_targets = self.train_set.data[lb_idx], self.train_set.true_targets[lb_idx]
-            ulb_data, ulb_targets, ulb_true_targets = self.train_set.data[ulb_idx], torch.tensor(self.train_set.targets)[ulb_idx], self.train_set.true_targets[ulb_idx]
+            ulb_data, ulb_targets, ulb_true_targets = self.train_set.data[ulb_idx], torch.cat(self.train_set.targets, dim=0)[ulb_idx], self.train_set.true_targets[ulb_idx]
+            cl_mask_index = np.random.choice(range(ulb_data.shape[0]), int(ulb_data.shape[0] * self.cl_ratio), replace=False)
+            cl_mask = torch.zeros(ulb_data.shape[0])
+            cl_mask[cl_mask_index] = 1
             strong_transform = copy.deepcopy(self.train_set.transform)
             strong_transform.transforms.insert(0, RandAugment(3, 5))
+            # print(ulb_data.shape, ulb_targets.shape, ulb_true_targets.shape)
+            # exit()
             self.lb_train_set = CLOLDataset(lb_data, lb_targets, lb_targets, weak_transform=self.train_set.transform, alg="ord")
-            self.ulb_train_set = CLOLDataset(ulb_data, ulb_targets, ulb_true_targets, weak_transform=self.train_set.transform, strong_transform=strong_transform, alg="freematch")
+            self.ulb_train_set = CLOLDataset(ulb_data, ulb_targets, ulb_true_targets, mask=cl_mask, weak_transform=self.train_set.transform, strong_transform=strong_transform, alg="freematch")
+        
+        if self.valid_type == "Accuracy":
+            for i in self.valid_idx:
+                self.train_set.targets[i] = self.train_set.true_targets[i].view(1)
     
     def train_dataloader(self):
         if self.ssl:
@@ -134,12 +144,16 @@ class CLDataModule(pl.LightningDataModule):
             lb_train_loader = DataLoader(
                 self.lb_train_set, 
                 batch_sampler=lb_batch_sampler, 
-                num_workers=4,
+                num_workers=8,
+                persistent_workers=True, 
+                pin_memory=True, 
             )
             ulb_train_loader = DataLoader(
                 self.ulb_train_set,  
                 batch_sampler=ulb_batch_sampler, 
-                num_workers=4,
+                num_workers=8,
+                persistent_workers=True, 
+                pin_memory=True, 
             )
             train_loader = {"lb_data": lb_train_loader, "ulb_data": ulb_train_loader}
         else:
@@ -156,33 +170,41 @@ class CLDataModule(pl.LightningDataModule):
                     )
                 ),
                 shuffle=False,
-                num_workers=4,
+                num_workers=1, 
+                persistent_workers=True, 
+                pin_memory=True, 
             )
         return train_loader
 
     def val_dataloader(self):
-        valid_sampler = IndexSampler(self.valid_idx)
         if self.valid_split:
+            valid_sampler = IndexSampler(self.valid_idx)
             valid_loader = DataLoader(
                 self.train_set,
                 sampler=valid_sampler,
                 batch_size=self.batch_size,
                 collate_fn=collate_fn_multi_label,
                 shuffle=False,
-                num_workers=4,
+                num_workers=8, 
+                persistent_workers=True, 
+                pin_memory=True, 
             )
         else:
             valid_loader = DataLoader(
                 self.test_set, 
                 batch_size=self.batch_size, 
                 shuffle=False, 
-                num_workers=4
+                num_workers=8, 
+                persistent_workers=True, 
+                pin_memory=True, 
             )
-        if self.ssl:
+        if self.ssl or 1:
             ulb_valid_loader = DataLoader(
                 self.ulb_train_set,  
                 batch_size=self.batch_size * 7, 
-                num_workers=4,
+                num_workers=8, 
+                persistent_workers=True, 
+                pin_memory=True, 
             )
             valid_loader = [valid_loader, ulb_valid_loader]
         return valid_loader
@@ -192,7 +214,9 @@ class CLDataModule(pl.LightningDataModule):
             self.test_set, 
             batch_size=self.batch_size, 
             shuffle=False, 
-            num_workers=4
+            num_workers=8, 
+            persistent_workers=True, 
+            pin_memory=True, 
         )
         return test_loader
     

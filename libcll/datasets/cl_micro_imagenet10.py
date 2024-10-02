@@ -101,6 +101,7 @@ class CLMicro_ImageNet10(torchvision.datasets.CIFAR10, CLBaseDataset):
             dataset = self(
                 train=True,
                 transform=train_transform,
+                num_cl=num_cl, 
             )
             if dataset_name == "micro_imagenet10":
                 Q = get_transition_matrix(transition_matrix, dataset.num_classes, noise, seed)
@@ -115,5 +116,6 @@ class CLMicro_ImageNet10(torchvision.datasets.CIFAR10, CLBaseDataset):
             dataset = self(
                 train=False,
                 transform=test_transform,
+                num_cl=num_cl, 
             )
         return dataset

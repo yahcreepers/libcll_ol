@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from libcll.strategies.Strategy import Strategy
 
 
-class MCL(Strategy):
+class MSSL(Strategy):
     def __init__(self, **args):
         super().__init__(**args)
         self.pseudo_labels = []

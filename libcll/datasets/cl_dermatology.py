@@ -87,7 +87,7 @@ class CLDermatology(CLBaseDataset):
     @classmethod
     def build_dataset(self, dataset_name=None, train=True, num_cl=0, transition_matrix=None, noise=None, seed=1126):
         if train:
-            dataset = self(train=train)
+            dataset = self(train=True)
             Q = get_transition_matrix(transition_matrix, dataset.num_classes, noise, seed)
             dataset.gen_complementary_target(num_cl, Q)
         else:

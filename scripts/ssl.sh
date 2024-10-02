@@ -1,17 +1,25 @@
 export CUDA_VISIBLE_DEVICES=$1
+# export NCCL_P2P_DISABLE=1
+# export NCCL_IB_DISABLE=1
+# export NCCL_DEBUG=info
+# export NCCL_SOCKET_IFNAME=eth0
+# export PL_TORCH_DISTRIBUTED_BACKEND=gloo
+# export OMP_NUM_THREADS=8
 
 strategy=$2
 tp=None
 model=$3
 dataset=$4
 sample=$5
+cl_r=$6
 valid_type=Accuracy
 num_cl=1
 transition_matrix=uniform
 
 output_dir="/tmp2/yahcreeper/test/libcll/logs/${strategy}_distributed/${dataset}-multi_label_${num_cl}-${transition_matrix}/${strategy}-${tp}-${model}-${dataset}"
 output_dir="/tmp2/yahcreeper/test/libcll/logs/test_${strategy}_record/"
-output_dir="/tmp2/yahcreeper/test/libcll/logs/test_${strategy}_record_multi/"
+output_dir="/tmp2/yahcreeper/test/libcll/logs/test_${strategy}_record_multi_multi/"
+output_dir="/tmp2/yahcreeper/test/libcll/logs/${strategy}/${dataset}-${sample}-${model}-cl_ratio_${cl_r}/"
 output_dir="/tmp2/yahcreeper/test/libcll/logs/test/"
 
 if [[ ${dataset} == "cifar10" ]]; then
@@ -23,8 +31,11 @@ elif [[ ${dataset} == "cifar100" ]]; then
     wid=8
     weight_decay=1e-3
 fi
-
-python scripts/train.py \
+# torchrun \
+#     --nproc_per_node=2 --nnodes=1 --node_rank 0 \
+#     --master_addr localhost --master_port 50000 \
+python \
+    scripts/train.py \
     --do_train \
     --do_predict \
     --strategy ${strategy} \
@@ -46,3 +57,4 @@ python scripts/train.py \
     --depth ${depth} \
     --widen_factor ${wid} \
     --weight_decay ${weight_decay} \
+    --cl_ratio ${cl_r}

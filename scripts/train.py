@@ -20,7 +20,7 @@ def main(args):
     cl_data_module = prepare_cl_data_module(
         args.dataset._name,
         batch_size=args.training.batch_size,
-        valid_split=args.training.valid_split,
+        valid_split=args.dataset.valid_split,
         valid_type=args.training.valid_type,
         one_hot=(args.strategy._name == "MCL"),
         num_cl=args.dataset.num_cl,
@@ -30,6 +30,7 @@ def main(args):
         seed=args.training.seed,
         ssl=args.training.ssl, 
         samples_per_class=args.training.samples_per_class, 
+        cl_ratio=args.dataset.cl_ratio, 
     )
     cl_data_module.prepare_data()
     cl_data_module.setup(stage="fit")
@@ -82,6 +83,8 @@ def main(args):
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
     print("Start Training......")
+    from pytorch_lightning.strategies import DDPStrategy
+    ddp = DDPStrategy(process_group_backend="gloo")
     trainer = pl.Trainer(
         max_epochs=args.training.epoch if not args.training.ssl else None,
         max_steps=args.training.max_steps, 
@@ -93,6 +96,8 @@ def main(args):
         val_check_interval=5000 if args.training.ssl else None, 
         callbacks=[checkpoint_callback_best, checkpoint_callback_last, lr_monitor],
         strategy="ddp_find_unused_parameters_true" if torch.cuda.device_count() > 1 else "auto", 
+        # strategy="ddp_notebook", 
+        # strategy=ddp, 
         use_distributed_sampler=False, 
         # num_nodes=2, 
     )
@@ -130,7 +135,10 @@ def parse_args():
     )
     parser.add_argument("--num_cl", dest="dataset.num_cl", type=int, default=1)
     parser.add_argument(
-        "--valid_split", dest="training.valid_split", type=float, default=0.1
+        "--valid_split", dest="dataset.valid_split", type=float, default=0.1
+    )
+    parser.add_argument(
+        "--cl_ratio", dest="dataset.cl_ratio", type=float, default=1.0
     )
     parser.add_argument(
         "--eval_epoch", dest="training.eval_epoch", type=int, default=10
