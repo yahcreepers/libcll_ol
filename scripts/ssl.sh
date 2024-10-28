@@ -7,11 +7,11 @@ export CUDA_VISIBLE_DEVICES=$1
 # export OMP_NUM_THREADS=8
 
 strategy=$2
-tp=None
-model=$3
-dataset=$4
-sample=$5
-cl_r=$6
+tp=$3
+model=$4
+dataset=$5
+sample=$6
+cl_r=$7
 valid_type=Accuracy
 num_cl=1
 transition_matrix=uniform
@@ -19,12 +19,16 @@ transition_matrix=uniform
 output_dir="/tmp2/yahcreeper/test/libcll/logs/${strategy}_distributed/${dataset}-multi_label_${num_cl}-${transition_matrix}/${strategy}-${tp}-${model}-${dataset}"
 output_dir="/tmp2/yahcreeper/test/libcll/logs/test_${strategy}_record/"
 output_dir="/tmp2/yahcreeper/test/libcll/logs/test_${strategy}_record_multi_multi/"
-output_dir="/tmp2/yahcreeper/test/libcll/logs/${strategy}/${dataset}-${sample}-${model}-cl_ratio_${cl_r}/"
-output_dir="/tmp2/yahcreeper/test/libcll/logs/test/"
+output_dir="/tmp2/yahcreeper/test/libcll/logs/${strategy}/${strategy}-${tp}-${dataset}-${sample}-${model}-cl_ratio_${cl_r}/"
+output_dir="/tmp2/yahcreeper/test/libcll/logs/test-cifar10/"
 
 if [[ ${dataset} == "cifar10" ]]; then
     depth=28
     wid=2
+    weight_decay=5e-4
+elif [[ ${dataset} == "cifar20" ]]; then
+    depth=28
+    wid=8
     weight_decay=5e-4
 elif [[ ${dataset} == "cifar100" ]]; then
     depth=28
@@ -57,4 +61,4 @@ python \
     --depth ${depth} \
     --widen_factor ${wid} \
     --weight_decay ${weight_decay} \
-    --cl_ratio ${cl_r}
+    --cl_ratio ${cl_r} \

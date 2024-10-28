@@ -93,13 +93,14 @@ def main(args):
         log_every_n_steps=args.training.log_step,
         deterministic=True,
         check_val_every_n_epoch=args.training.eval_epoch if not args.training.ssl else None,
-        val_check_interval=5000 if args.training.ssl else None, 
+        val_check_interval=2000 if "test" in args.strategy.type else 5000 if args.training.ssl else None, 
         callbacks=[checkpoint_callback_best, checkpoint_callback_last, lr_monitor],
         strategy="ddp_find_unused_parameters_true" if torch.cuda.device_count() > 1 else "auto", 
         # strategy="ddp_notebook", 
         # strategy=ddp, 
         use_distributed_sampler=False, 
         # num_nodes=2, 
+        # num_sanity_val_steps=0, 
     )
     if args.training.do_train:
         with open(f"{args.training.output_dir}/config.yaml", "w") as f:

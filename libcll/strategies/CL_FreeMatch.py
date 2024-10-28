@@ -3,18 +3,30 @@ import torch
 import torch.nn.functional as F
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
+import torchvision
 import math
 from libcll.strategies.Strategy import Strategy
+import matplotlib.pyplot as plt
+import io
+from PIL import Image
+import seaborn as sn
+from libcll.models import EMA
 
 
 class CL_FreeMatch(Strategy):
     def __init__(self, **args):
         super().__init__(**args)
+        self.ema_model = EMA(self.model, 0.999)
+        if "PCL" in self.type:
+            self.Q = torch.ones(self.num_classes, self.num_classes) * 1 / (self.num_classes - 1)
+            for k in range(self.num_classes):
+                self.Q[k, k] = 0
         self.p_model = (torch.ones(self.num_classes) / self.num_classes)
         self.label_hist = (torch.ones(self.num_classes) / self.num_classes)
         self.time_p = 1 / self.num_classes
         self.pseudo_labels = []
         self.pseudo_logits = []
+        self.strong_logits = []
         self.true_targets = []
     
     @torch.no_grad()
@@ -123,15 +135,58 @@ class CL_FreeMatch(Strategy):
         # exit()
         # print("WWW", cl_mask.shape, y_cl.shape)
         # exit()
+        if "PCL" in self.type:
+            if "PCL-3" in self.type:
+                logits_cl = logits_x_ulb_w.detach().clone()
+                if "True" in self.type:
+                    for i, index in enumerate(y_cl):
+                        logits_cl[i][index.long()] = float("inf")
+                    cl_min, y_pcl = torch.topk(-logits_cl, k=2, dim=-1)
+                    y_cl = torch.cat((y_cl.view(-1 ,1), y_pcl), dim=-1)
+                else:
+                    cl_min, y_cl = torch.topk(-logits_cl, k=3, dim=-1)
+                # y_cl = 
+            elif "PCL-dif" in self.type:
+                p_w = F.softmax(logits_x_ulb_w, dim=1)
+                p_s = F.softmax(logits_x_ulb_s, dim=1)
+                p_dif = torch.abs(p_w - p_s)
+                y_pl = torch.argmax(p_w, dim=1)
+                for i, index in enumerate(y_pl):
+                    p_dif[i][index.long()] = -1
+                _, y_cl = torch.topk(p_dif, k=3, dim=-1)
+            elif "PCL-" in self.type:
+                p = F.softmax(logits_x_ulb_w, dim=1)
+                thres = float(self.type.split("-")[1])
+                y_cl_e = p.le(thres)
+                # print("WWW", y_cl_e.count_nonzero())
+                # print("WWWQ", p[y_cl_e], p, logits_x_ulb_w)
+                # exit()
+            else:
+                cl_min, y_cl = torch.min(logits_x_ulb_w, dim=-1)
+                # print(y_cl)
+                cl_mask = torch.ones_like(y_cl)
+            
         N = torch.count_nonzero(cl_mask)
         if N > 0:
-            p = (1 - F.softmax(logits_x_ulb_w, dim=1) + 1e-6).log() * -1
-            cl_loss = -(F.nll_loss(p, y_cl.long(), reduction="none") * cl_mask).sum() / N
+            if "FWD" in self.type:
+                p = torch.mm(F.softmax(logits_x_ulb_s, dim=1), self.Q.to(self.device)) + 1e-6
+                cl_loss = 0.01 * (F.nll_loss(p.log(), y_cl.long(), reduction="none") * cl_mask).sum() / N
+            elif "PCL-3" in self.type or "PCL-dif" in self.type:
+                p = (1 - F.softmax(logits_x_ulb_s, dim=1) + 1e-6).log() * -1
+                y_cl_e = F.one_hot(y_cl.long(), num_classes=self.num_classes).sum(dim=-2)
+                cl_loss = (p * y_cl_e).sum() / y_cl_e.count_nonzero()
+            elif "PCL-" in self.type:
+                p = (1 - F.softmax(logits_x_ulb_s, dim=1) + 1e-6).log() * -1
+                # print((p * y_cl_e).sum(), y_cl_e.count_nonzero(), p * y_cl_e, y_cl_e)
+                cl_loss = (p * y_cl_e).sum() / y_cl_e.count_nonzero()
+                # exit()
+            else:
+                p = (1 - F.softmax(logits_x_ulb_s, dim=1) + 1e-6).log() * -1
+                cl_loss = -(F.nll_loss(p, y_cl.long(), reduction="none") * cl_mask).sum() / N
         else:
             cl_loss = 0
-        
-        # exit()
-        loss = sup_loss + unsup_loss + 0.05 * ent_loss + cl_loss
+        loss = sup_loss + unsup_loss + 0.01 * ent_loss + cl_loss
+        # print(sup_loss, unsup_loss, ent_loss, cl_loss)
         self.log("Threshold/Confidence_Threshold", self.time_p)
         # self.log("Sampling_Rate", mask.float().mean())
         self.log("Loss/Train_Loss", loss)
@@ -180,10 +235,13 @@ class CL_FreeMatch(Strategy):
         }
         return [optimizer], [scheduler]
     
+    def on_before_backward(self, loss: torch.Tensor) -> None:
+        self.ema_model.update(self.model)
+    
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         if dataloader_idx == 0:
             x, y = batch
-            out = self.model(x)
+            out = self.ema_model.module(x)
             if self.valid_type == "URE":
                 val_loss = self.compute_ure(out, y)
             elif self.valid_type == "SCEL":
@@ -197,15 +255,17 @@ class CL_FreeMatch(Strategy):
             self.val_loss.append(val_loss)
             return {"val_loss": val_loss}
         if dataloader_idx == 1:
-            x_ulb_w, x_ulb_s, y_cl, y_ulb, mask = batch
+            x_ulb_w, x_ulb_s, y_cl, y_ulb, cl_mask = batch
             num_ulb = x_ulb_w.shape[0]
             inputs = torch.cat((x_ulb_w, x_ulb_s))
-            logits = self.model(inputs)
+            logits = self.ema_model.module(inputs)
             logits_x_ulb_w, logits_x_ulb_s = logits.chunk(2)
             pseudo_logits = torch.softmax(logits_x_ulb_w, dim=-1)
-            pseudo_logits, pseudo_label = torch.max(pseudo_logits, dim=-1)
+            _, pseudo_label = torch.max(pseudo_logits, dim=-1)
+            strong_logits = torch.softmax(logits_x_ulb_s, dim=-1)
             self.pseudo_labels.append(pseudo_label)
             self.pseudo_logits.append(pseudo_logits)
+            self.strong_logits.append(strong_logits)
             self.true_targets.append(y_ulb)
     
     def on_validation_epoch_end(self):
@@ -213,21 +273,77 @@ class CL_FreeMatch(Strategy):
         self.log(f"Valid_{self.valid_type}", avg_val_loss, sync_dist=True)
         pseudo_labels = torch.cat(self.pseudo_labels, dim=0)
         pseudo_logits = torch.cat(self.pseudo_logits, dim=0)
+        strong_logits = torch.cat(self.strong_logits, dim=0)
         true_targets = torch.cat(self.true_targets, dim=0)
         mask_acc = (pseudo_labels == true_targets)
         self.p_model = self.p_model.to(self.device)
         p_cutoff = self.time_p
         p_model_cutoff = self.p_model / torch.max(self.p_model,dim=-1)[0]
         threshold = p_cutoff * p_model_cutoff[pseudo_labels]
-        mask = pseudo_logits.ge(threshold)
+        mask = pseudo_logits.max(dim=-1)[0].ge(threshold)
         for thres in [0.0, 0.5, 0.75]:
-            mask_log = pseudo_logits.ge(thres)
+            mask_log = pseudo_logits.max(dim=-1)[0].ge(thres)
             acc = mask_acc[mask_log].float().mean()
             self.log(f"Noisy_Rate/Thres_{thres}", 1 - acc, sync_dist=True)
             self.log(f"Sampling_Rate/Thres_{thres}", mask_log.float().mean(), sync_dist=True)
+        if "PCL-3" in self.type or "PCL-dif" in self.type:
+            cl_min, pcl = torch.topk(-pseudo_logits, k=3, dim=-1)
+            pcl_noise = (pcl == true_targets.view(-1, 1)).float().mean()
+            self.log(f"Noisy_Rate/Pseudo_Complementary_Label", pcl_noise, sync_dist=True)
+        elif "PCL-" in self.type:
+            # p = F.softmax(pseudo_logits, dim=1)
+            alg_thres = float(self.type.split("-")[1])
+            dis, _ = torch.sort(pseudo_logits, dim=1)
+            dis = dis.mean(dim=0)
+            plt.bar(range(self.num_classes), dis.cpu().detach().numpy())
+            colors = ["r", "g", "b", "yellow"]
+            for i, thres in enumerate([alg_thres * 10, alg_thres, alg_thres * 0.1, alg_thres * 0.01]):
+                y_cl_e = pseudo_logits.le(thres)
+                y_cl_num = y_cl_e.count_nonzero()
+                pcl_noise = y_cl_e.gather(index=true_targets.long().view(-1, 1), dim=1).sum() / y_cl_num
+                self.log(f"Noisy_Rate/Pseudo_Complementary_Label_{thres}", pcl_noise, sync_dist=True)
+                self.log(f"Noisy_Rate/Pseudo_Complementary_Label_Num_{thres}", y_cl_num / pseudo_logits.shape[0], sync_dist=True)
+                plt.axhline(y=thres, color=colors[i], label=thres)
+            plt.legend()
+            buf = io.BytesIO()
+            plt.savefig(buf, format='jpeg', bbox_inches='tight')
+            buf.seek(0)
+            im = Image.open(buf)
+            im = torchvision.transforms.ToTensor()(im)
+            self.logger.experiment.add_image("Confidence_Distribution", im, global_step=self.global_step)
+            plt.close()
+        else:
+            pcl = pseudo_logits.argmin(dim=-1)
+            pcl_noise = (pcl == true_targets.view(-1, 1)).float().mean()
+            self.log(f"Noisy_Rate/Pseudo_Complementary_Label", pcl_noise, sync_dist=True)
+        # Q = torch.zeros((self.num_classes, self.num_classes)).cuda()
+        # for idx in range(true_targets.shape[0]):
+        #     Q[true_targets[idx].long()][pcl[idx].long()] += 1
+        # Q = Q / Q.sum(dim=1).view(-1, 1)
+        # # self.Q = Q
+        # mp = Q.detach().cpu().numpy()
+        # fig, ax = plt.subplots(figsize=(self.num_classes, self.num_classes))
+        # sn.heatmap(mp, annot=True, annot_kws={"size": 16}, ax=ax)
+        # buf = io.BytesIO()
+        # plt.savefig(buf, format='jpeg', bbox_inches='tight')
+        # buf.seek(0)
+        # im = Image.open(buf)
+        # im = torchvision.transforms.ToTensor()(im)
+        # self.logger.experiment.add_image("Pseudo_CL_Distribution", im, global_step=self.global_step)
         self.log(f"Noisy_Rate/Thres_Alg", 1 - mask_acc[mask.long()].float().mean(), sync_dist=True)
         self.log(f"Sampling_Rate/Thres_Alg", mask.float().mean(), sync_dist=True)
         self.val_loss.clear()
         self.pseudo_labels.clear()
         self.pseudo_logits.clear()
+        self.strong_logits.clear()
         self.true_targets.clear()
+        # plt.close()
+    
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        # out = self.model(x)
+        out = self.ema_model.module(x)
+        y_pred = torch.argmax(out, dim=1)
+        acc = (y_pred == y).sum() / y_pred.shape[0]
+        self.test_acc.append(acc)
+        return {"test_acc": acc}

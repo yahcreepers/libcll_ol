@@ -5,11 +5,13 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 import math
 from libcll.strategies.Strategy import Strategy
+from libcll.models import EMA
 
 
 class FreeMatch(Strategy):
     def __init__(self, **args):
         super().__init__(**args)
+        self.ema_model = EMA(self.model, 0.999)
         self.p_model = (torch.ones(self.num_classes) / self.num_classes)
         self.label_hist = (torch.ones(self.num_classes) / self.num_classes)
         self.time_p = 1 / self.num_classes
@@ -19,7 +21,7 @@ class FreeMatch(Strategy):
     
     @torch.no_grad()
     def cal_time_p_and_p_model(self, logits_x_ulb_w, time_p, p_model, label_hist):
-        prob_w = torch.softmax(logits_x_ulb_w, dim=1) 
+        prob_w = torch.softmax(logits_x_ulb_w, dim=-1) 
         max_probs, max_idx = torch.max(prob_w, dim=-1)
         if time_p is None:
             time_p = max_probs.mean()
@@ -72,12 +74,14 @@ class FreeMatch(Strategy):
         # modulate prob model 
         prob_model = prob_model.reshape(1, -1)
         label_hist = label_hist.reshape(1, -1)
-        prob_model_scaler = torch.nan_to_num(1 / label_hist, nan=0.0, posinf=0.0, neginf=0.0).detach()
+        # prob_model_scaler = torch.nan_to_num(1 / label_hist, nan=0.0, posinf=0.0, neginf=0.0).detach()
+        prob_model_scaler = self.replace_inf_to_zero(1 / label_hist).detach()
         mod_prob_model = prob_model * prob_model_scaler
         mod_prob_model = mod_prob_model / mod_prob_model.sum(dim=-1, keepdim=True)
 
         # modulate mean prob
-        mean_prob_scaler_s = torch.nan_to_num(1 / hist_s, nan=0.0, posinf=0.0, neginf=0.0).detach()
+        # mean_prob_scaler_s = torch.nan_to_num(1 / hist_s, nan=0.0, posinf=0.0, neginf=0.0).detach()
+        mean_prob_scaler_s = self.replace_inf_to_zero(1 / hist_s).detach()
         mod_mean_prob_s = prob_s.mean(dim=0, keepdim=True) * mean_prob_scaler_s
         mod_mean_prob_s = mod_mean_prob_s / mod_mean_prob_s.sum(dim=-1, keepdim=True)
 
@@ -85,6 +89,10 @@ class FreeMatch(Strategy):
         loss = loss.sum(dim=1)
         return loss.mean(), hist_s.mean()
     
+    def replace_inf_to_zero(self, val):
+        val[val == float('inf')] = 0.0
+        return val
+
     def training_step(self, batch, batch_idx):
         x_lb, y_lb = batch["lb_data"]
         x_ulb_w, x_ulb_s, y_cl, y_ulb, cl_mask = batch["ulb_data"]
@@ -164,10 +172,14 @@ class FreeMatch(Strategy):
         }
         return [optimizer], [scheduler]
     
+    def on_before_backward(self, loss: torch.Tensor) -> None:
+        self.ema_model.update(self.model)
+    
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         if dataloader_idx == 0:
             x, y = batch
-            out = self.model(x)
+            # out = self.model(x)
+            out = self.ema_model.module(x)
             if self.valid_type == "URE":
                 val_loss = self.compute_ure(out, y)
             elif self.valid_type == "SCEL":
@@ -184,10 +196,10 @@ class FreeMatch(Strategy):
             x_ulb_w, x_ulb_s, y_cl, y_ulb, cl_mask = batch
             num_ulb = x_ulb_w.shape[0]
             inputs = torch.cat((x_ulb_w, x_ulb_s))
-            logits = self.model(inputs)
+            logits = self.ema_model.module(inputs)
             logits_x_ulb_w, logits_x_ulb_s = logits.chunk(2)
             pseudo_logits = torch.softmax(logits_x_ulb_w, dim=-1)
-            pseudo_logits, pseudo_label = torch.max(pseudo_logits, dim=-1)
+            _, pseudo_label = torch.max(pseudo_logits, dim=-1)
             self.pseudo_labels.append(pseudo_label)
             self.pseudo_logits.append(pseudo_logits)
             self.true_targets.append(y_ulb)
@@ -203,9 +215,9 @@ class FreeMatch(Strategy):
         p_cutoff = self.time_p
         p_model_cutoff = self.p_model / torch.max(self.p_model,dim=-1)[0]
         threshold = p_cutoff * p_model_cutoff[pseudo_labels]
-        mask = pseudo_logits.ge(threshold)
+        mask = pseudo_logits.max(dim=-1)[0].ge(threshold)
         for thres in [0.0, 0.5, 0.75]:
-            mask_log = pseudo_logits.ge(thres)
+            mask_log = pseudo_logits.max(dim=-1)[0].ge(thres)
             acc = mask_acc[mask_log].float().mean()
             self.log(f"Noisy_Rate/Thres_{thres}", 1 - acc, sync_dist=True)
             self.log(f"Sampling_Rate/Thres_{thres}", mask_log.float().mean(), sync_dist=True)
@@ -215,3 +227,12 @@ class FreeMatch(Strategy):
         self.pseudo_labels.clear()
         self.pseudo_logits.clear()
         self.true_targets.clear()
+    
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        # out = self.model(x)
+        out = self.ema_model.module(x)
+        y_pred = torch.argmax(out, dim=1)
+        acc = (y_pred == y).sum() / y_pred.shape[0]
+        self.test_acc.append(acc)
+        return {"test_acc": acc}

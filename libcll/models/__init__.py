@@ -3,6 +3,7 @@ from .Linear import Linear
 from .MLP import MLP
 from .ResNet import ResNet18, ResNet34, WideResNet
 from .DenseNet import DenseNet
+from .EMA import EMA
 
 MODEL_LIST = {
     "Linear": Linear,

@@ -180,7 +180,7 @@ class CLCIFAR20(torchvision.datasets.CIFAR100, CLBaseDataset):
                 )
             with open(dataset_path, "rb") as f:
                 data = pickle.load(f)
-            self.data = data["images"]
+            self.data = np.array(data["images"])
             self.true_targets = torch.Tensor(data["ord_labels"]).view(-1)
             self.targets = torch.Tensor(data["cl_labels"])[:, :num_cl]
             self.transform = transform
